@@ -22,7 +22,7 @@ void setup() {
   WiFi.onEvent(WiFiEvent);
 
   WiFi.mode(WIFI_STA);
-  WiFi.begin("Ben&Steph", "Ben&Steph");
+  WiFi.begin("ssid", "password");
 
 }
 
