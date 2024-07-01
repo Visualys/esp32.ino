@@ -1,7 +1,10 @@
 #include <WiFi.h>
+#include <HTTPClient.h>
 #define LED 2
 
 uint8_t wificonnected = 0;
+String msg = "http://192.168.1.32:8080/dmx.db?cmd=mes&mes=65,essai";
+HTTPClient request;
 
 void WiFiEvent(WiFiEvent_t event){
   if(event==14) wificonnected = 0;
@@ -17,8 +20,9 @@ void setup() {
   digitalWrite(LED, LOW);
 
   WiFi.onEvent(WiFiEvent);
+
   WiFi.mode(WIFI_STA);
-  WiFi.begin("ssid", "password");
+  WiFi.begin("Ben&Steph", "Ben&Steph");
 
 }
 
@@ -28,5 +32,9 @@ void loop() {
     delay(150);
     digitalWrite(LED, LOW);
     delay(150);
+    }else{
+    request.begin(msg.c_str());
+    request.GET();
+    delay(60000);
     }
   }
