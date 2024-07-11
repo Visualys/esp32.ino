@@ -1,0 +1,98 @@
+uint8_t wificonnected = 0;
+
+#if defined(ESP8266)
+#include <ESP8266WiFi.h>
+#include <ESP8266HTTPClient.h>
+HTTPClient request;
+WiFiClient client;
+#include <ESP8266WebServer.h>
+ESP8266WebServer server(80);
+void WiFiEvent(WiFiEvent_t event){
+  if(event==2) wificonnected = 0;
+  if(event==3) {
+    wificonnected = 1;
+    server.close();
+    server.begin();
+    Serial.println(WiFi.localIP());
+    }
+  Serial.println(event);
+  }
+void get(char *msg){
+  request.begin(client, msg);
+  request.GET();
+  }
+#define LEDHIGH 0
+#define LEDLOW 1
+
+#elif defined(ESP32)
+#include <WiFi.h>
+#include <HTTPClient.h>
+HTTPClient request;
+#include <WebServer.h>
+WebServer server(80);
+void WiFiEvent(WiFiEvent_t event){
+  if(event==14) wificonnected = 0;
+  if(event==16) {
+    wificonnected = 1;
+    server.close();
+    server.begin();
+    Serial.println(WiFi.localIP());
+    }
+  }
+void get(char *msg){
+  request.begin(msg);
+  request.GET();
+  }
+#define LEDHIGH 1
+#define LEDLOW 0
+
+#else
+#error "This ain't a ESP8266 or ESP32, dumbo!"
+#endif
+
+char msg[128];
+#define LED 2
+float tmr=0.0;
+uint8_t n=0;
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED, OUTPUT);
+  digitalWrite(LED, LEDLOW);
+  WiFi.onEvent(WiFiEvent);
+  WiFi.mode(WIFI_STA);
+  WiFi.begin("***", "***");
+  server.on("/reboot", [](){
+    server.send(200, "text/html","ok");
+    server.close();
+    ESP.restart();
+    });
+  server.on("/set", [](){
+    for (uint8_t i = 0; i < server.args(); i++) {
+      if(server.argName(i)=="n") n=server.arg(i).toInt();
+      server.send(200, "text/html","ok");
+      }
+    });
+ server.on("/reconnect", [](){
+    server.send(200, "text/html","ok");
+    server.close();
+    server.begin();
+    });  
+  }
+
+void loop() {
+  if(!wificonnected){
+    digitalWrite(LED, LEDHIGH);
+    delay(150);
+    digitalWrite(LED, LEDLOW);
+    delay(150);
+    }else{
+    server.handleClient();
+    if(millis() > tmr){
+      n++;
+      sprintf(msg, "http://192.168.1.32:8080/dmx.db?cmd=mes&mes=65,%d\0",n);
+      get(msg);
+      tmr = millis() + 10000.0;
+      }
+    }
+  }
