@@ -1,0 +1,119 @@
+uint8_t wificonnected = 0;
+float wifitmr = millis() + 60000.0;
+
+#include <WiFi.h>
+#include <HTTPClient.h>
+HTTPClient request;
+#include <WebServer.h>
+WebServer server(80);
+void WiFiEvent(WiFiEvent_t event){
+  if(event==14) wificonnected = 0; wifitmr = millis() + 60000.0;
+  if(event==16) {
+    wificonnected = 1;
+    server.close();
+    server.begin();
+    Serial.println(WiFi.localIP());
+    }
+  }
+void get(char *msg){
+  request.begin(msg);
+  request.GET();
+  }
+#define LEDHIGH 1
+#define LEDLOW 0
+
+#include <PZEM004Tv30.h>
+PZEM004Tv30 pzem(Serial2, 16, 17);
+
+char msg[128];
+#define LED 2
+float tmr=0.0, tmr2=0.0;
+uint8_t n=0;
+int linky = 0;
+float pos = 0;
+uint8_t pwm1 = 0, pwm2 = 0;
+float w = 0, idx = 0, c = 0;
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED, OUTPUT);
+  pinMode(25, OUTPUT); // pwm1
+  analogWrite(25, 0);
+  analogWriteFrequency(25, 1000);
+  pinMode(26, OUTPUT); // pwm2
+  analogWrite(26, 0);
+  analogWriteFrequency(26, 1000);
+  digitalWrite(LED, LEDLOW);
+  WiFi.onEvent(WiFiEvent);
+  WiFi.mode(WIFI_STA);
+  WiFi.begin("Ben&Steph", "Ben&Steph");
+  server.on("/reboot", [](){
+    server.send(200, "text/html","ok");
+    server.close();
+    ESP.restart();
+    });
+  server.on("/info", [](){
+    sprintf(msg, "{watt:%.2f, pos:%.2f, index:%.0f}", w, pos, idx);
+    server.send(200, "text/html", msg);
+
+    });
+  server.on("/set", [](){
+    for (uint8_t i = 0; i < server.args(); i++) {
+      if(server.argName(i)=="linky") {
+        linky = server.arg(i).toInt();
+        tmr2 = millis() + 60000.0;
+        c = w - linky;
+        }
+      
+      server.send(200, "text/html","ok");
+      }
+    });
+ server.on("/reconnect", [](){
+    server.send(200, "text/html","ok");
+    server.close();
+    server.begin();
+    });  
+  }
+
+void loop() {
+  if(!wificonnected){
+    digitalWrite(LED, LEDHIGH);
+    delay(150);
+    digitalWrite(LED, LEDLOW);
+    delay(150);
+    if(millis() > wifitmr) ESP.restart(); // restart if disconnected since 1 min
+    }else{
+    server.handleClient();
+    if(millis() > tmr2){ // pas de consigne pendant 1 min (alerte!)
+      tmr2 = millis() + 60000.0;
+      linky = 9999;
+      }
+    if(millis() > tmr){
+      tmr = millis() + 500.0;
+      n++;
+      w = pzem.power();
+      idx = pzem.energy() * 1000;
+      
+      pos += (c - w) / 32.0;
+      if(pos < 0.0 ){
+        pos = 0;
+        }else if(pos > 511.0){
+        pos = 511;
+        }
+      if(pos < 256){
+        pwm1 = int(pos);
+        pwm2 = 0;
+      }else{
+        pwm1 = 255;
+        pwm2 = int(pos - 256);
+      }
+      analogWrite(25, pwm1);
+      analogWrite(26, pwm2);
+      if(n>20){ //10s
+        n=0;
+        sprintf(msg, "http://192.168.1.32:8080/dmx.db?cmd=mes&mes=20,%.2f,22,%.2f,21,%.0f\0", w, pos, idx);
+        get(msg);
+        }
+      }
+    }
+  }
