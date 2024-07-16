@@ -1,0 +1,116 @@
+uint8_t wificonnected = 0;
+float wifitmr = millis() + 60000.0;
+
+#include <WiFi.h>
+#include <HTTPClient.h>
+HTTPClient request;
+#include <WebServer.h>
+WebServer server(80);
+void WiFiEvent(WiFiEvent_t event){
+  if(event==14) wificonnected = 0; wifitmr = millis() + 60000.0;
+  if(event==16) {
+    wificonnected = 1;
+    server.close();
+    server.begin();
+    Serial.println(WiFi.localIP());
+    }
+  }
+void get(char *msg){
+  request.begin(msg);
+  request.GET();
+  }
+#define LEDHIGH 1
+#define LEDLOW 0
+
+char msg[128];
+#define LED 2
+float tmr=0.0, tmr2=0.0;
+uint8_t n=0;
+
+#define MODBUS_RX 18
+#define MODBUS_TX 19
+#define MODBUS_DE_RE 4
+//HardwareSerial Serial2(2);
+byte a[8];
+
+void crc16(){
+  int crc = 0xFFFF;
+  uint8_t c;
+  for(uint8_t i=0; i < 6; i++){
+    c = a[i];
+    crc = crc ^ c;
+    for(uint8_t j=0; j < 8; j++){
+      if (crc & 0x01){
+        crc = (crc >> 1) ^ 0xA001;
+        }else{
+        crc = crc >> 1;
+        }
+      }
+    }
+  a[6] = crc & 0xFF;
+  a[7] = crc >> 8;
+  }
+
+
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED, OUTPUT);
+  pinMode(MODBUS_DE_RE, OUTPUT);
+  digitalWrite(MODBUS_DE_RE, LOW);
+  Serial2.begin(115200, SERIAL_8N1, MODBUS_RX, MODBUS_TX);
+  a[0] = 1; a[1] = 3; a[2] = 0x02; a[3] = 0x00; a[4] = 0; a[5] = 45;
+  crc16(); // calculate crc for a[]
+  WiFi.onEvent(WiFiEvent);
+  WiFi.mode(WIFI_STA);
+  WiFi.begin("Ben&Steph", "Ben&Steph");
+  server.on("/reboot", [](){
+    server.send(200, "text/html","ok");
+    server.close();
+    ESP.restart();
+    });
+  server.on("/info", [](){
+    //sprintf(msg, "{watt:%.2f, pos:%.2f, index:%.0f}", w, pos, idx);
+    //server.send(200, "text/html", msg);
+    });
+  server.on("/set", [](){
+    for (uint8_t i = 0; i < server.args(); i++) {
+      if(server.argName(i)=="n") {
+        n = server.arg(i).toInt();
+        }
+      server.send(200, "text/html","ok");
+      }
+    });
+  server.on("/reconnect", [](){
+    server.send(200, "text/html","ok");
+    server.close();
+    server.begin();
+    });  
+  }
+int ser2count = 0;
+void loop() {
+  if(!wificonnected){
+    digitalWrite(LED, LEDHIGH);
+    delay(150);
+    digitalWrite(LED, LEDLOW);
+    delay(150);
+    if(millis() > wifitmr) ESP.restart(); // restart if disconnected since 1 min
+    }else{
+    server.handleClient();
+    ser2count = Serial2.available();
+    if (ser2count>0) Serial.println(ser2count);
+    if(millis() > tmr){
+      tmr = millis() + 2000.0;
+      n++;
+      digitalWrite(MODBUS_DE_RE, HIGH);
+      delay(10);
+      for(uint8_t x=0;x < 8; x++){
+        Serial2.print(a[x]);
+        }
+      digitalWrite(MODBUS_DE_RE, LOW);
+
+      sprintf(msg, "http://192.168.1.32:8080/dmx.db?cmd=mes&mes=65,%.2f\0", 128.28);
+      get(msg);
+      }
+    }
+  }
