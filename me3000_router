@@ -1,0 +1,210 @@
+uint8_t wificonnected = 0;
+unsigned long wifitmr = millis() + 60000;
+
+#include <WiFi.h>
+#include <HTTPClient.h>
+HTTPClient request;
+#include <WebServer.h>
+WebServer server(80);
+void WiFiEvent(WiFiEvent_t event){
+  if(event==14) wificonnected = 0; wifitmr = millis() + 60000.0;
+  if(event==16) {
+    wificonnected = 1;
+    server.close();
+    server.begin();
+    Serial.println(WiFi.localIP());
+    }
+  }
+void get(char *msg){
+  request.begin(msg);
+  request.GET();
+  }
+#define LEDHIGH 1
+#define LEDLOW 0
+
+char msg[200];
+#define LED 2
+unsigned long tmr=0, tmr2=0;
+uint8_t n=0;
+
+// ME3000SP Modbus config
+#define MODBUS_RX 18
+#define MODBUS_TX 19
+#define MODBUS_DE_RE 4
+byte a[8] = {0x01, 0x03, 0x02, 0x00, 0x00, 0x2D, 0x84, 0x6F};
+byte meReg[95], staNum, battlev;
+char statxt[16];
+float volt, freq, gridin, homeload, meload, pv, todaypv, todayout, todayin, todayload;
+int cycles;
+
+// PZEM config
+#include <PZEM004Tv30.h>
+int linky = 0;
+float pos = 0;
+uint8_t pwm1 = 0, pwm2 = 0;
+float w = 0, idx = 0, c = 0;
+
+
+int myinteger(uint8_t d1, uint8_t d2){
+  return (d1<<8 | d2);
+  }
+
+int mysignedinteger(uint8_t d1, uint8_t d2){
+  int n = d1<<8 | d2;
+  if(n & 0x8000){
+    n = (n & 0x7FFF) - 32767;
+    }
+  return n;
+  }
+
+bool readME3000SP(){
+  pinMode(MODBUS_DE_RE, OUTPUT);
+  digitalWrite(MODBUS_DE_RE, LOW);
+  Serial2.begin(115200, SERIAL_8N1, MODBUS_RX, MODBUS_TX);
+  Serial2.setTimeout(300);
+  uint8_t tries = 0;
+  while(tries++ < 3){
+    delay(100);
+    meReg[0]=0;
+    meReg[1]=0;
+    staNum = 100;
+    sprintf(statxt,"Read error");
+    Serial2.flush();
+    while(Serial2.available()) Serial2.read(); //clean flush
+    digitalWrite(LED, LEDHIGH);
+    digitalWrite(MODBUS_DE_RE, HIGH);
+    delay(100);
+    Serial2.write(a, 8);
+    Serial2.flush();
+    digitalWrite(MODBUS_DE_RE, LOW);
+    digitalWrite(LED, LEDLOW);
+    delay(100);
+    Serial2.readBytes(meReg, 95);
+    if (meReg[0]==1 && meReg[1]==3) {
+        tries=99; // ok
+        staNum = myinteger(meReg[3],meReg[4]);
+        if(staNum==0){ sprintf(statxt,"Wait");
+          }else if(staNum==1){ sprintf(statxt,"Charge_check");
+          }else if(staNum==2){ sprintf(statxt,"Charge");
+          }else if(staNum==3){ sprintf(statxt,"Discharge_check");
+          }else if(staNum==4){ sprintf(statxt,"Discharge");
+          }else if(staNum==5){ sprintf(statxt,"EPS");
+          }else if(staNum==6 || staNum==7){  sprintf(statxt,"Fault");
+          }
+        volt = myinteger(meReg[15],meReg[16]) * .1;
+        freq = myinteger(meReg[27],meReg[28]) * .01;
+        battlev = myinteger(meReg[35],meReg[36]);
+        gridin = -mysignedinteger(meReg[39],meReg[40]) * 10;
+        homeload = myinteger(meReg[41],meReg[42]) * 10;
+        meload = mysignedinteger(meReg[43],meReg[44]) * 10;
+        pv = myinteger(meReg[45],meReg[46]) * 10;
+        todaypv = myinteger(meReg[51],meReg[52]) * 10;
+        todayout = myinteger(meReg[53],meReg[54]) * 10;
+        todayin = myinteger(meReg[55],meReg[56]) * 10;
+        todayload = myinteger(meReg[57],meReg[58]) * 10;
+        cycles = myinteger(meReg[91],meReg[92]);
+
+      }
+    }
+  return staNum != 100;
+  }
+
+void readPZEM(){
+  PZEM004Tv30 pzem(Serial2, 16, 17);
+  delay(100);
+  w = pzem.power();
+  idx = pzem.energy() * 1000; // indice delestage
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED, OUTPUT);
+
+
+  pinMode(25, OUTPUT); // pwm1
+  analogWriteFrequency(25, 1000);
+  analogWrite(25, 0);
+  pinMode(26, OUTPUT); // pwm2
+  analogWriteFrequency(26, 1000);
+  analogWrite(26, 0);
+
+  WiFi.onEvent(WiFiEvent);
+  WiFi.mode(WIFI_STA);
+  WiFi.begin("Ben&Steph", "Ben&Steph");
+  server.on("/reboot", [](){
+    server.send(200, "text/html","ok");
+    server.close();
+    ESP.restart();
+    });
+  server.on("/info", [](){
+    sprintf(msg, "{volt:%.2f, freq:%.2f, battlev:%d, cycles:%d, w_delest:%.2f}", volt, freq, battlev, cycles, w);
+    server.send(200, "text/html", msg);
+    });
+  server.on("/set", [](){
+    for (uint8_t i = 0; i < server.args(); i++) {
+      if(server.argName(i)=="n") {
+        n = server.arg(i).toInt();
+        }
+      server.send(200, "text/html","ok");
+      }
+    });
+  }
+
+void loop() {
+  if(!wificonnected){
+    digitalWrite(LED, LEDHIGH);
+    delay(150);
+    digitalWrite(LED, LEDLOW);
+    delay(150);
+    if(millis() > wifitmr) ESP.restart(); // restart if disconnected since 1 min
+  }else{
+    server.handleClient();
+    if(millis() > tmr){
+      tmr = millis() + 1000;
+      n++;
+      if (readME3000SP()){
+        if(battlev < 90){     // batterie en dessous de 90%
+          linky = 9999;
+        }else if(meload > 0){ // la batterie se decharge
+          linky = 9999;
+        }else{
+          linky = gridin;
+          }
+        delay(100);
+        readPZEM();
+        if(isnan(w)) w = 3000; //au cas où;
+        c = w - linky;
+
+        pos += (c - w) / 32.0;
+        if(pos < 0.0 ){
+          pos = 0;
+          }else if(pos > 511.0){
+          pos = 511;
+          }
+        if(pos < 256){
+          pwm1 = int(pos);
+          pwm2 = 0;
+        }else{
+          pwm1 = 255;
+          pwm2 = int(pos - 256);
+          }
+        analogWrite(25, pwm1);
+        analogWrite(26, pwm2);
+        if(n>=5){
+          n = 0;
+          sprintf(msg, "http://192.168.1.32:8080/dmx.db?cmd=mes&mes=26,%s,25,%d,32,%.0f,33,%.0f,27,%.0f,31,%.0f,20,%.2f,22,%.2f\0", statxt, battlev, gridin, homeload, meload, pv, w, pos);
+          get(msg);
+          Serial.println(msg); 
+          }
+        }
+      }    
+    if(millis() > tmr2){
+      tmr2 = millis() + 60000;
+      if(staNum != 100){
+        sprintf(msg, "http://192.168.1.32:8080/dmx.db?cmd=mes&mes=11,%.2f,12,%.2f,28,%.0f,34,%.0f,29,%.0f,30,%.0f,13,%d,21,%.0f\0", volt, freq, todaypv, todayout, todayin, todayload, cycles, idx);
+        get(msg);
+        Serial.println(msg);
+        }
+      }
+    }
+  }
